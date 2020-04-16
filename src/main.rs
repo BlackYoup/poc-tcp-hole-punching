@@ -5,6 +5,7 @@ use std::mem;
 use std::os::unix::io::AsRawFd;
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
+use bytes::{BufMut, BytesMut};
 
 #[derive(Eq, PartialEq)]
 enum State {
@@ -20,12 +21,23 @@ struct Stream {
 fn hole_punching(mut client_a: Stream, mut client_b: Stream) -> Result<(), io::Error> {
   let client_a_peer = client_a.stream.peer_addr().unwrap();
   let client_b_peer = client_b.stream.peer_addr().unwrap();
-  let client_a_punch_order = format!("PUNCH {} {}", client_b_peer.ip(), client_b_peer.port());
-  let client_b_punch_order = format!("PUNCH {} {}", client_a_peer.ip(), client_a_peer.port());
 
-  client_a.stream.write_all(client_a_punch_order.as_bytes())?;
+  let client_a_addr = format!("{} {}", client_a_peer.ip(), client_a_peer.port());
+  let client_b_addr = format!("{} {}", client_b_peer.ip(), client_b_peer.port());
+
+  let mut client_a_punch_order = BytesMut::new();
+  client_a_punch_order.put_u8(1);
+  client_a_punch_order.put_u8(client_b_addr.len() as _);
+  client_a_punch_order.put(client_b_addr.as_bytes());
+
+  let mut client_b_punch_order = BytesMut::new();
+  client_b_punch_order.put_u8(1);
+  client_b_punch_order.put_u8(client_a_addr.len() as _);
+  client_b_punch_order.put(client_a_addr.as_bytes());
+
+  client_a.stream.write_all(&client_a_punch_order)?;
   client_a.stream.flush()?;
-  client_b.stream.write_all(client_b_punch_order.as_bytes())?;
+  client_b.stream.write_all(&client_b_punch_order)?;
   client_b.stream.flush()?;
 
   Ok(())
@@ -75,10 +87,13 @@ fn client_punch(stream: TcpStream, addr: String, port: String) -> Result<(), io:
 fn send_public(mut stream: &TcpStream) -> Result<(), io::Error> {
   println!("send public");
   let peer_addr = stream.peer_addr()?;
-  let body: String = format!("PUBLIC {}:{}", peer_addr.ip(), peer_addr.port());
-  println!("Writing to client {}:{}", peer_addr.ip(), peer_addr.port());
-  let mut buffer = body.as_bytes();
-  stream.write_all(&mut buffer)?;
+  let addr = format!("{}:{}", peer_addr.ip(), peer_addr.port());
+  let mut body = BytesMut::new();
+  body.put_u8(0);
+  body.put_u8(addr.len() as u8);
+  body.put(addr.as_bytes());
+  println!("Writing to client {}:{} -> {:?}", peer_addr.ip(), peer_addr.port(), body);
+  stream.write_all(&body)?;
   stream.flush()?;
 
   Ok(())
@@ -120,7 +135,7 @@ fn server() -> Result<(), io::Error> {
       println!("Got two stream, should punch each other");
       let client_a = streams.remove(0);
       let client_b = streams.remove(0);
-      hole_punching(client_a, client_b);
+      hole_punching(client_a, client_b)?;
     }
 
     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -134,28 +149,38 @@ fn client(addr: String, port: String) -> Result<(), io::Error> {
   let tcp = TcpBuilder::new_v4()?;
   tcp.reuse_address(true)?.reuse_port(true).unwrap();
   let mut stream = tcp.connect(connect)?;
-  let mut buffer = [0; 128].to_vec();
-  loop {
-    match stream.read(&mut buffer) {
-      Ok(0) => continue,
-      Ok(_) => break,
-      Err(e) => panic!("error: {}", e)
-    }
+  let mut order = [0; 1];
+  stream.read_exact(&mut order)?;
+
+  if order[0] != 0 {
+    panic!("Unexpected message: {}", order[0]);
   }
 
-  println!("Received: {}", String::from_utf8(buffer).unwrap());
+  let mut order_length = [0; 1];
+  stream.read_exact(&mut order_length)?;
+  let mut order_content = Vec::with_capacity(order_length[0] as usize);
+  unsafe { order_content.set_len(order_length[0] as usize) };
+  stream.read_exact(&mut order_content)?;
+
+  println!("Received: {}, {}, {}", order[0], order_length[0], String::from_utf8(order_content).unwrap());
 
   println!("Waiting for hole punching order");
 
-  let mut hole_punching_buffer = String::new();
-  stream.read_to_string(&mut hole_punching_buffer)?;
+  let mut order = [0; 1];
+  stream.read_exact(&mut order)?;
+  match order[0] {
+    1 => {
+      let mut order_len = [0; 1];
+      stream.read_exact(&mut order_len)?;
+      let mut order_body = Vec::with_capacity(order_len[0] as usize);
+      unsafe { order_body.set_len(order_len[0] as usize) };
+      stream.read_exact(&mut order_body)?;
+      let order_body_string = String::from_utf8(order_body).unwrap();
+      let mut splitted = order_body_string.split(" ");
 
-  let mut splitted = hole_punching_buffer.split(" ");
-
-  match splitted.next() {
-    Some("PUNCH") => client_punch(stream, splitted.next().unwrap().to_string(), splitted.next().unwrap().to_string())?,
-    Some("hello?") => println!("Other client talked to us??"),
-    _ => panic!("Unknown order: {}", hole_punching_buffer)
+      client_punch(stream, splitted.next().unwrap().to_string(), splitted.next().unwrap().to_string())?
+    }
+    _ => panic!("Unknown order: {}", order[0])
   }
 
   Ok(())
