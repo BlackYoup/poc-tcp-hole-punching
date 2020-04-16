@@ -88,6 +88,10 @@ fn client_punch(mut stream: TcpStream, addr: String, port: String) -> Result<(),
         println!("Connected!");
         remote_connect.write_all(b"hello?")?;
         remote_connect.flush()?;
+        let mut response = [0; 6];
+        remote_connect.read_exact(&mut response)?;
+        println!("Received response: {:?}", response);
+        break;
       }
       Err(ref e) if e.kind() == io::ErrorKind::ConnectionRefused => continue,
       Err(e) => panic!("error: {}", e)
