@@ -43,7 +43,7 @@ fn hole_punching(mut client_a: Stream, mut client_b: Stream) -> Result<(), io::E
   Ok(())
 }
 
-fn client_punch(stream: TcpStream, addr: String, port: String) -> Result<(), io::Error> {
+fn client_punch(mut stream: TcpStream, addr: String, port: String) -> Result<(), io::Error> {
   println!("Should punch {}:{}", addr, port);
   let local_addr = stream.local_addr().unwrap();
   let tcp = TcpBuilder::new_v4()?;
@@ -70,9 +70,22 @@ fn client_punch(stream: TcpStream, addr: String, port: String) -> Result<(), io:
       break;
     }
 
+    let mut buff = [0; 128];
+    match stream.read(&mut buff) {
+      Ok(0) => {},
+      Ok(sz) => println!("I read {} from original stream :o: {:?}", sz, &buff[..sz]),
+      Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {},
+      Err(e) => panic!("Unknown error: {}", e)
+    }
+
     println!("Trying to connect to remote {}:{}", addr, port);
-    match TcpStream::connect(format!("{}:{}", addr, port)) {
+    let remote_tcp = TcpBuilder::new_v4()?;
+    remote_tcp.reuse_address(true)?.reuse_port(true)?;
+    remote_tcp.bind(format!("0.0.0.0:{}", local_addr.port()))?;
+
+    match remote_tcp.connect(format!("{}:{}", addr, port)) {
       Ok(mut remote_connect) => {
+        println!("Connected!");
         remote_connect.write_all(b"hello?")?;
         remote_connect.flush()?;
       }
