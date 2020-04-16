@@ -59,11 +59,14 @@ fn client_punch(stream: TcpStream, addr: String, port: String) -> Result<(), io:
     }
 
     println!("Trying to connect to remote {}:{}", addr, port);
-    let mut remote_connect = TcpStream::connect(format!("{}:{}", addr, port))?;
-    remote_connect.write_all(b"hello?")?;
-    remote_connect.flush()?;
-
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    match TcpStream::connect(format!("{}:{}", addr, port)) {
+      Ok(mut remote_connect) => {
+        remote_connect.write_all(b"hello?")?;
+        remote_connect.flush()?;
+      }
+      Err(ref e) if e.kind() == io::ErrorKind::ConnectionRefused => continue,
+      Err(e) => panic!("error: {}", e)
+    }
   }
 
   Ok(())
