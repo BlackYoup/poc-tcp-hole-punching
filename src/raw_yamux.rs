@@ -10,6 +10,7 @@ use net2::unix::UnixTcpBuilderExt;
 fn server() {
   let mut runtime = runtime::Builder::new()
   .threaded_scheduler()
+  .enable_time()
   .enable_io()
   .build()
   .unwrap();
@@ -20,7 +21,7 @@ fn server() {
   }
 
   let server = async move {
-    let mut listener = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4040))).await.expect("bind");
+    let mut listener = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 4040))).await.expect("bind");
     println!("Listening on port 4040");
     let mut streams: Vec<StreamInfo> = Vec::new();
     loop {
@@ -79,6 +80,7 @@ fn server() {
 fn client(address: SocketAddr) {
     let mut runtime = runtime::Builder::new()
     .threaded_scheduler()
+    .enable_time()
     .enable_io()
     .build()
     .unwrap();
@@ -124,8 +126,9 @@ fn client(address: SocketAddr) {
         let data = "Hello world!";
         yamux::into_stream(conn).try_for_each_concurrent(None, |mut stream| async move {
           let mut buffer = [0; 1024];
+          tokio::time::delay_for(std::time::Duration::from_millis(500)).await;
           let read = stream.read(&mut buffer).await?;
-          println!("Read from other peer: {:?}", String::from_utf8_lossy(&buffer[..read]).to_string());
+          println!("(Server) Read from other peer: {:?}", String::from_utf8_lossy(&buffer[..read]).to_string());
           stream.write_all(&data.as_bytes()).await?;
           stream.flush().await.unwrap();
           Ok(())
@@ -152,11 +155,12 @@ fn client(address: SocketAddr) {
             let mut ctrl2 = ctrl.clone();
             task::spawn(async move {
               let mut stream = ctrl2.open_stream().await?;
+              tokio::time::delay_for(std::time::Duration::from_millis(500)).await;
               stream.write_all(&data.as_bytes()).await?;
               stream.flush().await.unwrap();
               let mut buffer = [0; 1024];
               let read = stream.read(&mut buffer).await?;
-              println!("Read from other peer: {:?}", String::from_utf8_lossy(&buffer[..read]).to_string());
+              println!("(Client) Read from other peer: {:?}", String::from_utf8_lossy(&buffer[..read]).to_string());
               Ok::<(), yamux::ConnectionError>(())
             }).await.unwrap().unwrap();
             ctrl.close().await.expect("close connection");
