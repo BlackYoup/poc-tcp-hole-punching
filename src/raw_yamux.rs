@@ -113,30 +113,6 @@ fn client(address: SocketAddr) {
 
       println!("Init tcp hole punch");
 
-      let tcp = net2::TcpBuilder::new_v4().unwrap();
-      tcp.reuse_address(true).unwrap().reuse_port(true).unwrap();
-      let local_bind = tcp.bind(local_addr).unwrap();
-
-      let mut listener = TcpListener::from_std(local_bind.clone().listen(1024).unwrap()).unwrap();
-      task::spawn(async move {
-        let stream = listener.accept().await.unwrap();
-        println!("Accepted incoming from {:?}", stream.1);
-        let conn = Connection::new(stream.0.compat(), Config::default(), Mode::Server);
-
-        let data = "Hello world!";
-        yamux::into_stream(conn).try_for_each_concurrent(None, |mut stream| async move {
-          let mut buffer = [0; 1024];
-          tokio::time::delay_for(std::time::Duration::from_millis(500)).await;
-          let read = stream.read(&mut buffer).await?;
-          println!("(Server) Read from other peer: {:?}", String::from_utf8_lossy(&buffer[..read]).to_string());
-          stream.write_all(&data.as_bytes()).await?;
-          stream.flush().await.unwrap();
-          Ok(())
-        }).await.unwrap();
-        println!("We are done!");
-        std::process::exit(0);
-      });
-
       loop {
         let tcp = net2::TcpBuilder::new_v4().unwrap();
         tcp.reuse_address(true).unwrap().reuse_port(true).unwrap();
